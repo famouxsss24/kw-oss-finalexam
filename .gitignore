@@ -7,3 +7,6 @@ venv/
 .streamlit/secrets.toml
 .pytest_cache/
 .mypy_cache/
+
+# 영상 촬영용 메모 (제출 X)
+영상대본.md
