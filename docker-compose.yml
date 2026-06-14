@@ -1,0 +1,29 @@
+name: defense-first
+
+services:
+  back:
+    build:
+      context: ./back
+    container_name: defense-first-back
+    environment:
+      DB_PATH: /app/data/defense_first.db
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-haiku-4-5}
+    ports:
+      - "8000:8000"
+    volumes:
+      - defense_first_data:/app/data
+
+  front:
+    build:
+      context: ./front
+    container_name: defense-first-front
+    environment:
+      API_URL: http://back:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - back
+
+volumes:
+  defense_first_data:
