@@ -21,7 +21,17 @@ def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def operator_in_department(department_id: int, operator_id: int) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM operators WHERE id = ? AND department_id = ?",
+            (operator_id, department_id),
+        ).fetchone()
+    return row is not None
 
 
 def init_db() -> None:

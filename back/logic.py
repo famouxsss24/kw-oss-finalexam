@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
 from typing import Any
 
 
@@ -54,134 +52,15 @@ def build_recommendation(mode: str, answers: dict[str, Any]) -> dict[str, Any]:
     score += min(len(damage_flags) * 6, 18)
     score = max(0, min(score, 100))
 
-    risk_level = _risk_level(score)
-    priority = _priority(score)
-
-    # 규칙 기반 결과 — 항상 결정적으로 계산된다 (fallback의 기준).
-    result = {
+    return {
         "risk_score": score,
-        "risk_level": risk_level,
+        "risk_level": _risk_level(score),
         "threat_category": threat,
-        "priority": priority,
-        "summary": _summary(mode, threat, asset, priority),
+        "priority": _priority(score),
+        "summary": _summary(mode, threat, asset, _priority(score)),
         "recommendations": _recommendations(mode, threat, asset),
         "regulations": _regulations(regulations, asset),
-        "engine": "rule-fallback",
     }
-
-    # Claude API가 사용 가능하면 대응책 문장만 상황 맞춤으로 고도화한다.
-    enhanced = _enhance_with_ai(mode, threat, asset, risk_level, priority, answers)
-    if enhanced is not None:
-        result["summary"] = enhanced["summary"]
-        result["recommendations"] = enhanced["recommendations"]
-        result["engine"] = "ai"
-
-    return result
-
-
-# --- AI 고도화 레이어 (선택적, 실패 시 규칙 fallback) ---------------------------
-
-_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")  # 비용 위해 저렴한 모델 기본값
-
-# 캐시되는 안정적 프리픽스 — 매 요청 동일하게 유지해야 프롬프트 캐싱이 동작한다.
-_SYSTEM_PROMPT = (
-    "당신은 방위산업 보안 대응 전문가입니다. "
-    "입력으로 위협 진단 결과(위협 유형, 영향 자산, 위험 등급, 우선순위, 모드)를 받아, "
-    "해당 상황에 딱 맞는 보안 대응책을 한국어로 작성합니다.\n\n"
-    "규칙:\n"
-    "- 대응책은 정확히 3개를 작성하고, 각각 '기술적' / '관리적' / '물리적' 유형을 하나씩 다룬다.\n"
-    "- 사고대응(incident) 모드는 '즉시 조치' 관점의 긴박한 어조로, "
-    "예방점검(preventive) 모드는 '사전 강화' 관점의 차분한 어조로 작성한다.\n"
-    "- title은 12자 내외의 행동 중심 문구, detail은 1~2문장의 구체적 실행 방법으로 작성한다.\n"
-    "- 방산 실무 맥락(설계도면·기밀·공급망·내부자 등)을 반영하되, 과장하거나 허위 규정을 만들지 않는다.\n"
-    "- summary는 진단 상황을 1문장으로 요약한다.\n\n"
-    "응답은 반드시 아래 형태의 JSON 객체 하나만 출력한다. 코드블록이나 설명 문장을 덧붙이지 않는다.\n"
-    '{"summary": "...", "recommendations": '
-    '[{"type": "기술적", "title": "...", "detail": "..."}, '
-    '{"type": "관리적", "title": "...", "detail": "..."}, '
-    '{"type": "물리적", "title": "...", "detail": "..."}]}'
-)
-
-
-def _enhance_with_ai(
-    mode: str,
-    threat: str,
-    asset: str,
-    risk_level: str,
-    priority: str,
-    answers: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Claude로 맞춤 대응책을 생성. 키가 없거나 실패하면 None을 반환해 규칙 fallback으로 둔다."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        return None
-
-    try:
-        import anthropic  # 지연 임포트 — 미설치 환경에서도 규칙 엔진은 동작
-    except ImportError:
-        return None
-
-    mode_label = "사고대응(이미 침해 발생)" if mode == "incident" else "예방점검(사전 대비)"
-    context = (
-        f"모드: {mode_label}\n"
-        f"위협 유형: {threat}\n"
-        f"영향/보호 자산: {asset}\n"
-        f"위험 등급: {risk_level}\n"
-        f"우선순위: {priority}\n"
-        f"추가 입력: {json.dumps(answers, ensure_ascii=False)}\n\n"
-        "위 진단에 맞는 대응책을 작성해 주세요."
-    )
-
-    try:
-        client = anthropic.Anthropic(timeout=20.0, max_retries=1)
-        response = client.messages.create(
-            model=_MODEL,
-            max_tokens=1500,
-            system=[
-                {
-                    "type": "text",
-                    "text": _SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": context}],
-        )
-        text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
-        data = _parse_json_object(text)
-        if data is None:
-            return None
-        recs = data.get("recommendations")
-        summary = data.get("summary")
-        if not isinstance(recs, list) or not recs or not summary:
-            return None
-        # 스키마 방어: 필요한 키가 있는 항목만 통과
-        clean = [
-            {"type": r.get("type", "기술적"), "title": r["title"], "detail": r["detail"]}
-            for r in recs
-            if isinstance(r, dict) and r.get("title") and r.get("detail")
-        ]
-        if not clean:
-            return None
-        return {"summary": str(summary), "recommendations": clean}
-    except Exception:
-        # 네트워크/인증/파싱 등 어떤 실패든 규칙 fallback으로 안전하게 전환
-        return None
-
-
-def _parse_json_object(text: str) -> dict[str, Any] | None:
-    """모델 응답에서 JSON 객체를 추출한다. 코드블록이 섞여도 첫 {...} 구간을 시도한다."""
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            return None
-    return None
 
 
 def _first_value(value: Any) -> str | None:

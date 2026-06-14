@@ -16,6 +16,7 @@ from storage import (
     init_db,
     list_case_notes,
     list_cases,
+    operator_in_department,
     update_case_status,
 )
 
@@ -89,6 +90,9 @@ def recommend(payload: RecommendRequest) -> dict[str, Any]:
     if department is None:
         raise HTTPException(status_code=404, detail="부서를 찾을 수 없습니다.")
 
+    if not operator_in_department(payload.department_id, payload.operator_id):
+        raise HTTPException(status_code=403, detail="해당 부서 소속 실무자가 아닙니다.")
+
     result = build_recommendation(payload.mode, payload.answers)
     case = create_case(
         department_id=payload.department_id,
@@ -128,6 +132,8 @@ def get_notes(case_id: int, department_id: int) -> dict[str, Any]:
 
 @app.post("/cases/{case_id}/notes")
 def post_note(case_id: int, payload: NoteRequest) -> dict[str, Any]:
+    if not operator_in_department(payload.department_id, payload.operator_id):
+        raise HTTPException(status_code=403, detail="해당 부서 소속 실무자가 아닙니다.")
     try:
         note = add_case_note(
             case_id=case_id,
